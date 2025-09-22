@@ -63,10 +63,17 @@ DEMAT_AC_TYPE_RE = r"^(NSDL|CDSL)\s+demat\s+account|Mutual\s+Fund\s+Folios\s+\(F
 DEMAT_MF_TYPE_RE = r"^Mutual\s+Fund\s+Folios\s+\(F\)$"
 DEMAT_AC_HOLDER_RE = r"([^\t\n]+?)\s*\(PAN\s*:\s*(.+?)\)"
 DEMAT_DP_ID_RE = r"DP\s*Id\s*:\s*(.+?)\s*Client\s*Id\s*:\s*(\d+).+PAN"
+# NSDL_EQ_RE = (
+#     rf"^([A-Z]{{2}}[E|9][0-9A-Z]{{8}}[0-9]{{1}})"
+#     rf"\s*(.+?)\s*{amt_re}\s+([\d,.]+)\s+{amt_re}\s+{amt_re}$"
+# )
 NSDL_EQ_RE = (
-    rf"^([A-Z]{{2}}[E|9][0-9A-Z]{{8}}[0-9]{{1}})"
-    rf"\s*(.+?)\s*{amt_re}\s+([\d,.]+)\s+{amt_re}\s+{amt_re}$"
+    rf"^([A-Z]{{2}}[E9][0-9A-Z]{{8}}[0-9])"   # <-- fixed [E|9] → [E9], simplified {1}
+    rf"\s*(.+?)\s*{amt_re}\s+"
+    rf"([\d,.]+)\s+"
+    rf"{amt_re}\s+{amt_re}$"
 )
+
 NSDL_MF_RE = rf"^(INF[0-9A-Z]{{8}}[0-9]{{1}})\s*(.*?)\s*{amt_re}\s+{amt_re}\s+{amt_re}$"
 NSDL_CDSL_HOLDINGS_RE = (
     r"^([A-Z]{2}[0-9A-Z]{9}[0-9]{1})\s*(.+?)\s+" + rf"{amt_re}\s+" * 10 + rf"{amt_re}$"
@@ -74,4 +81,16 @@ NSDL_CDSL_HOLDINGS_RE = (
 NSDL_MF_HOLDINGS_RE = (
     rf"({isin_re})\n(.+?)[\n\t]+(.+?)\t\t(\w+?)\t\t{amt_re}"
     rf"\t\t{amt_re}\t\t{amt_re}\t\t{amt_re}\t\t{amt_re}\t\t{amt_re}(?:\t\t{amt_re})?$"
+)
+
+BOND_NAME_RE = (
+    r"(?:"
+    r"NCDS?|NCB|BOND|BONDS|DEBENTURE|DEBENTURES|"
+    r"REDEEM|REDEMPT|RED\s*DT|REDDT|MATUR|MDT|"
+    r"NON\s*CUM|NONCUM|CUMULATIVE|COUPON|YTM|TAX\s*FREE|TAXFREE|TRANCHE|"
+    r"SECURED|SECRED|UNSECURED|"
+    r"SR[\s\-]*\d+[A-Z]?|"      # SR-1, SR 2A etc.
+    r"FV\s*RS\.?1?000|FVRS?1?000|F\.?V\.?R?S?1?000|F\s*V\s*R?S?1?000|"
+    r"\d{1,2}\.\d{2}\s*%|[\s\-]\d{1,2}%"
+    r")"
 )

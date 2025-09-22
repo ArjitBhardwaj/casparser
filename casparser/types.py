@@ -117,9 +117,14 @@ class Equity(BaseModel):
     @classmethod
     def fix_float(cls, data: dict):
         for k, v in data.items():
-            if issubclass(Decimal, cls.__annotations__[k]) and isinstance(v, str):
+            if (
+                k in cls.__annotations__
+                and issubclass(Decimal, cls.__annotations__[k])
+                and isinstance(v, str)
+            ):
                 data[k] = v.replace(",", "_").replace("_", "")
         return data
+
 
 
 class MutualFund(BaseModel):
@@ -141,6 +146,26 @@ class MutualFund(BaseModel):
                 data[k] = v.replace(",", "_").replace("_", "")
         return data
 
+class CorporateBond(BaseModel):
+    name: Optional[str] = None
+    isin: str
+    # CAS usually shows quantity/face value/price/value. We keep these minimal.
+    quantity: Decimal  # e.g., number of debentures/bonds
+    price: Decimal     # per-unit price shown in CAS table
+    value: Decimal     # total market value
+
+    @model_validator(mode="before")
+    @classmethod
+    def fix_float(cls, data: dict):
+        # Make Decimal fields robust to "1,234.56" strings
+        for k, v in data.items():
+            if (
+                k in cls.__annotations__
+                and issubclass(Decimal, cls.__annotations__[k])
+                and isinstance(v, str)
+            ):
+                data[k] = v.replace(",", "_").replace("_", "")
+        return data
 
 class DematAccount(BaseModel):
     name: str
@@ -152,17 +177,24 @@ class DematAccount(BaseModel):
     owners: List[DematOwner]
     equities: List[Equity]
     mutual_funds: List[MutualFund]
+    corporate_bonds: List[CorporateBond] = Field(default_factory=list)  # <-- NEW
 
     @model_validator(mode="before")
     @classmethod
     def fix_float(cls, data: dict):
         for k, v in data.items():
             try:
-                if issubclass(Decimal, cls.__annotations__[k]) and isinstance(v, str):
-                    data[k] = v.replace(",", "_")
+                if (
+                    k in cls.__annotations__
+                    and issubclass(Decimal, cls.__annotations__[k])
+                    and isinstance(v, str)
+                ):
+                    data[k] = v.replace(",", "_").replace("_", "")
             except TypeError:
+                # typing constructs like List[...] will land here; ignore
                 pass
         return data
+
 
 
 class NSDLCASData(BaseModel):
