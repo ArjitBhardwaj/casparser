@@ -58,17 +58,20 @@ DEMAT_HEADER_RE = (
     r"((?:CDSL|NSDL)\s+demat\s+account)\s+(.+?)\s*DP\s*Id\s*:\s*(.+?)"
     r"\s*Client\s*Id\s*:\s*(\d+)\s+(\d+)\s+([\d,.]+)"
 )
-DEMAT_MF_HEADER_RE = r"Mutual Fund Folios\s+(\d+)\s+folios\s+(\d+)\s+([\d,.]+)"
-DEMAT_AC_TYPE_RE = r"^(NSDL|CDSL)\s+demat\s+account|Mutual\s+Fund\s+Folios\s+\(F\)"
-DEMAT_MF_TYPE_RE = r"^Mutual\s+Fund\s+Folios\s+\(F\)$"
+DEMAT_MF_HEADER_RE = r"Mutual Fund Folios\s+(\d+)\s+folios?\s+(\d+)\s+([\d,.]+)"
+
+# Enhanced patterns for detecting account types and MF sections
+DEMAT_AC_TYPE_RE = r"^(NSDL|CDSL)\s+demat\s+account|Mutual\s+Fund\s+Folios?\s*(?:\(F\))?"
+
+# More flexible MF type detection - handles variations in spacing and optional (F)
+DEMAT_MF_TYPE_RE = r"^Mutual\s+Fund\s+Folios?\s*(?:\(F\))?\s*$"
+
 DEMAT_AC_HOLDER_RE = r"([^\t\n]+?)\s*\(PAN\s*:\s*(.+?)\)"
 DEMAT_DP_ID_RE = r"DP\s*Id\s*:\s*(.+?)\s*Client\s*Id\s*:\s*(\d+).+PAN"
-# NSDL_EQ_RE = (
-#     rf"^([A-Z]{{2}}[E|9][0-9A-Z]{{8}}[0-9]{{1}})"
-#     rf"\s*(.+?)\s*{amt_re}\s+([\d,.]+)\s+{amt_re}\s+{amt_re}$"
-# )
+
+# Fixed NSDL equity regex - simplified character class
 NSDL_EQ_RE = (
-    rf"^([A-Z]{{2}}[E9][0-9A-Z]{{8}}[0-9])"   # <-- fixed [E|9] → [E9], simplified {1}
+    rf"^([A-Z]{{2}}[E9][0-9A-Z]{{8}}[0-9])"
     rf"\s*(.+?)\s*{amt_re}\s+"
     rf"([\d,.]+)\s+"
     rf"{amt_re}\s+{amt_re}$"
@@ -78,11 +81,48 @@ NSDL_MF_RE = rf"^(INF[0-9A-Z]{{8}}[0-9]{{1}})\s*(.*?)\s*{amt_re}\s+{amt_re}\s+{a
 NSDL_CDSL_HOLDINGS_RE = (
     r"^([A-Z]{2}[0-9A-Z]{9}[0-9]{1})\s*(.+?)\s+" + rf"{amt_re}\s+" * 10 + rf"{amt_re}$"
 )
+
+# Enhanced MF holdings regex with more flexible whitespace and optional fields
 NSDL_MF_HOLDINGS_RE = (
-    rf"({isin_re})\n(.+?)[\n\t]+(.+?)\t\t(\w+?)\t\t{amt_re}"
-    rf"\t\t{amt_re}\t\t{amt_re}\t\t{amt_re}\t\t{amt_re}\t\t{amt_re}(?:\t\t{amt_re})?$"
+    rf"({isin_re})\s*"                        # ISIN
+    rf"(.+?)\s+"                              # Name (can span multiple lines)
+    rf"(.+?)\s+"                              # UCC/Folio info
+    rf"(\w+?)\s+"                             # Folio number
+    rf"{amt_re}\s+"                           # Units/balance
+    rf"{amt_re}\s+"                           # Avg cost
+    rf"{amt_re}\s+"                           # Total cost
+    rf"{amt_re}\s+"                           # NAV
+    rf"{amt_re}\s+"                           # Value
+    rf"{amt_re}"                              # PnL
+    rf"(?:\s+{amt_re})?\s*$"                  # Optional returns
 )
 
+# Alternative MF holdings patterns for when the main one doesn't work
+NSDL_MF_HOLDINGS_ALT1 = (
+    rf"^({isin_re})\n"                        # ISIN on its own line
+    rf"(.+?)\n"                               # Name on next line
+    rf"(.+?)\t\t"                             # UCC/other info
+    rf"(\w+?)\t\t"                            # Folio
+    rf"{amt_re}\t\t"                          # Units
+    rf"{amt_re}\t\t"                          # Avg cost
+    rf"{amt_re}\t\t"                          # Total cost
+    rf"{amt_re}\t\t"                          # NAV
+    rf"{amt_re}\t\t"                          # Value
+    rf"{amt_re}"                              # PnL
+    rf"(?:\t\t{amt_re})?\s*$"                 # Optional returns
+)
+
+NSDL_MF_HOLDINGS_ALT2 = (
+    rf"({isin_re})\s+"                        # ISIN
+    rf"([^\t\n]+)\s+"                         # Name (non-tab, non-newline)
+    rf"([^\t\n]*)\s+"                         # UCC (optional)
+    rf"(\w*)\s+"                              # Folio (optional)
+    rf"{amt_re}\s+"                           # Units
+    rf"{amt_re}\s+"                           # NAV
+    rf"{amt_re}\s*$"                          # Value
+)
+
+# Bond name detection regex
 BOND_NAME_RE = (
     r"(?:"
     r"NCDS?|NCB|BOND|BONDS|DEBENTURE|DEBENTURES|"
