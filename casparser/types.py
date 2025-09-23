@@ -146,6 +146,52 @@ class MutualFund(BaseModel):
                 data[k] = v.replace(",", "_").replace("_", "")
         return data
 
+
+class MutualFundFolioF(BaseModel):
+    name: Optional[str] = None
+    isin: str
+    ucc: Optional[str] = None
+    folio: Optional[str] = None
+    balance: Union[Decimal, float, None] = None
+    avg_cost: Union[Decimal, float, None] = None
+    total_cost: Union[Decimal, float, None] = None
+    nav: Union[Decimal, float, None] = None
+    value: Union[Decimal, float, None] = None
+    pnl: Union[Decimal, float, None] = None
+    return_rate: Union[Decimal, float, None] = Field(default=None, alias="return")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def fix_float(cls, data: dict):
+        if data is None:
+            return data
+        cleaned = dict(data)
+        numeric_fields = {
+            "balance",
+            "avg_cost",
+            "total_cost",
+            "nav",
+            "value",
+            "pnl",
+            "return",
+            "return_rate",
+        }
+        for key, value in list(cleaned.items()):
+            if isinstance(value, str):
+                val = value.strip()
+                if val in {"--", "-", ""}:
+                    cleaned[key] = None
+                    continue
+                if key in numeric_fields:
+                    if val.startswith("(") and val.endswith(")"):
+                        val = f"-{val[1:-1]}"
+                    cleaned[key] = val.replace(",", "")
+        if "return" in cleaned and "return_rate" not in cleaned:
+            cleaned["return_rate"] = cleaned.pop("return")
+        return cleaned
+
 class CorporateBond(BaseModel):
     name: Optional[str] = None
     isin: str
@@ -177,6 +223,7 @@ class DematAccount(BaseModel):
     owners: List[DematOwner]
     equities: List[Equity]
     mutual_funds: List[MutualFund]
+    mf_folio_f: List[MutualFundFolioF] = Field(default_factory=list)
     corporate_bonds: List[CorporateBond] = Field(default_factory=list)  # <-- NEW
 
     @model_validator(mode="before")

@@ -72,6 +72,7 @@ def process_nsdl_text(text):
             "owners": [],
             "equities": [],
             "mutual_funds": [],
+            "mf_folio_f": [],
             "corporate_bonds": [],  # <-- NEW
         }
     for num_folios, _, balance in mutual_funds:
@@ -85,6 +86,7 @@ def process_nsdl_text(text):
             "owners": [],
             "equities": [],
             "mutual_funds": [],
+            "mf_folio_f": [],
             "corporate_bonds": [],  # <-- NEW
         }
 
@@ -215,19 +217,27 @@ def process_nsdl_text(text):
                 ) = m.groups()
                 name = re.sub(r"\s+", " ", name).strip()
                 name = re.sub(r"[^a-zA-Z0-9_)]+$", "", name).strip()
+                record = {
+                    "isin": isin,
+                    "ucc": (ucc or "").strip(),
+                    "name": name,
+                    "folio": (folio or "").strip(),
+                    "balance": units,
+                    "avg_cost": avg_cost,
+                    "total_cost": total_cost,
+                    "nav": nav,
+                    "value": value,
+                    "pnl": pnl,
+                    "return": returns,
+                }
+                current_demat["mf_folio_f"].append(record)
                 current_demat["mutual_funds"].append(
                     {
-                        "isin": isin,
-                        "ucc": ucc,
-                        "name": name,
-                        "folio": folio,
-                        "balance": units,
-                        "avg_cost": avg_cost,
-                        "total_cost": total_cost,
-                        "nav": nav,
-                        "value": value,
-                        "pnl": pnl,
-                        "return": returns,
+                        "isin": record["isin"],
+                        "name": record["name"],
+                        "balance": record["balance"],
+                        "nav": record["nav"],
+                        "value": record["value"],
                     }
                 )
 
