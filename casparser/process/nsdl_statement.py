@@ -119,8 +119,8 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
         # Pattern 1: Full detailed record (like from mf_folio_f section)
         detailed_pattern = (
             rf"({isin_re_pattern})\s*"  # ISIN
-            rf"(.+?)\s+"  # Name/Fund details
-            rf"(.+?)\s+"  # UCC
+            rf"(.+?)\s+"  # UCC (comes first in the data)
+            rf"(.+?)\s+"  # Name/Fund details (comes second)
             rf"(\w+?)\s+"  # Folio
             rf"{amt_re}\s+"  # Balance
             rf"{amt_re}\s+"  # Avg cost
@@ -148,11 +148,19 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
         if detailed_match:
             groups = detailed_match.groups()
             if len(groups) >= 10:
-                isin, raw_name, ucc, folio, balance, avg_cost, total_cost, nav, value, pnl = groups[:10]
+                isin, raw_ucc, raw_name, folio, balance, avg_cost, total_cost, nav, value, pnl = groups[:10]
                 returns = groups[10] if len(groups) > 10 else ""
 
-                # Clean the name field
+                # Clean the name and ucc fields
                 name = clean_fund_name(raw_name)
+                ucc = (raw_ucc or "").strip()
+
+                # Handle "NOT AVAILABLE" case - sometimes it gets split across UCC and name
+                if ucc == "NOT" and name.startswith("AVAILABLE"):
+                    ucc = "NOT AVAILABLE"
+                    name = name.replace("AVAILABLE", "").strip()
+                    # Clean up any extra whitespace or tab characters
+                    name = re.sub(r'^\s+', '', name)
 
                 # Skip if this looks like a summary line (corrupted data)
                 if re.search(r'[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+', name):
@@ -160,9 +168,9 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
                     continue
 
                 record = {
+                    "name": name,  # FIXED: Now correctly assigned
                     "isin": isin,
-                    "ucc": (ucc or "").strip(),
-                    "name": name,
+                    "ucc": ucc,  # FIXED: Now correctly assigned
                     "folio": (folio or "").strip(),
                     "balance": balance.replace(",", "") if balance else "",
                     "avg_cost": avg_cost.replace(",", "") if avg_cost else "",
@@ -190,9 +198,9 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
                 continue
 
             record = {
+                "name": name,  # Correctly assigned
                 "isin": isin,
                 "ucc": "",
-                "name": name,
                 "folio": "",
                 "balance": balance.replace(",", "") if balance else "",
                 "avg_cost": "",
