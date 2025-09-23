@@ -134,3 +134,40 @@ BOND_NAME_RE = (
     r"\d{1,2}\.\d{2}\s*%|[\s\-]\d{1,2}%"
     r")"
 )
+
+# Additional ISIN and amount regex patterns used in NSDL parsing
+NSDL_ISIN_RE = r"INF[0-9A-Z]{8}[0-9]"
+NSDL_AMT_RE = r"([(-]*[\d,.]+)\)*"
+
+# Account detection patterns
+CDSL_ACCOUNT_RE = r'(CDSL)\s+demat\s+account\s+(.+?)\s+DP\s+Id\s*:\s*(\d+)\s+Client\s+Id\s*:\s*(\d+)'
+NSDL_ACCOUNT_RE = r'(NSDL)\s+demat\s+account\s+(.+?)\s+DP\s+Id\s*:\s*(.+?)\s+Client\s+Id\s*:\s*(\d+)'
+
+# MF section patterns
+MF_SECTION_PATTERNS = [
+    r"^Mutual\s+Fund\s+Folios?\s*\(F\)\s*$",
+    r"^Mutual\s+Fund\s+Folios?\s*$",
+    r"^MF\s+Folios?\s*\(F\)\s*$",
+    r"^MF\s+Folios?\s*$",
+    r"Mutual\s+Fund.*Folios?",
+]
+
+# MF holdings detailed pattern (for mf_folio_f sections)
+def get_detailed_mf_pattern():
+    return (
+        rf"({NSDL_ISIN_RE})\s*"  # ISIN
+        rf"(.+?)\s+"  # UCC (comes first in the data)
+        rf"(.+?)\s+"  # Name/Fund details (comes second)
+        rf"(\w+?)\s+"  # Folio
+        rf"{NSDL_AMT_RE}\s+"  # Balance
+        rf"{NSDL_AMT_RE}\s+"  # Avg cost
+        rf"{NSDL_AMT_RE}\s+"  # Total cost
+        rf"{NSDL_AMT_RE}\s+"  # NAV
+        rf"{NSDL_AMT_RE}\s+"  # Value
+        rf"{NSDL_AMT_RE}"  # PnL
+        rf"(?:\s+{NSDL_AMT_RE})?\s*$"  # Optional returns
+    )
+
+# MF holdings simple pattern (for mutual_funds sections)
+def get_simple_mf_pattern():
+    return rf"({NSDL_ISIN_RE})\s+(.+?)\s+{NSDL_AMT_RE}\s+{NSDL_AMT_RE}\s+{NSDL_AMT_RE}\s*$"

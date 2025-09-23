@@ -18,6 +18,13 @@ from .regex import (
     NSDL_MF_HOLDINGS_RE,
     NSDL_MF_RE,
     BOND_NAME_RE,
+    NSDL_ISIN_RE,
+    NSDL_AMT_RE,
+    CDSL_ACCOUNT_RE,
+    NSDL_ACCOUNT_RE,
+    MF_SECTION_PATTERNS,
+    get_detailed_mf_pattern,
+    get_simple_mf_pattern,
 )
 
 
@@ -67,13 +74,11 @@ def find_account_context(lines, mf_section_line):
         line = lines[i].strip()
 
         # Check for CDSL/NSDL account patterns
-        cdsl_match = re.search(r'(CDSL)\s+demat\s+account\s+(.+?)\s+DP\s+Id\s*:\s*(\d+)\s+Client\s+Id\s*:\s*(\d+)',
-                               line, re.I)
+        cdsl_match = re.search(CDSL_ACCOUNT_RE, line, re.I)
         if cdsl_match:
             return ('CDSL', cdsl_match.groups()[1].strip(), cdsl_match.groups()[2], cdsl_match.groups()[3])
 
-        nsdl_match = re.search(r'(NSDL)\s+demat\s+account\s+(.+?)\s+DP\s+Id\s*:\s*(.+?)\s+Client\s+Id\s*:\s*(\d+)',
-                               line, re.I)
+        nsdl_match = re.search(NSDL_ACCOUNT_RE, line, re.I)
         if nsdl_match:
             return ('NSDL', nsdl_match.groups()[1].strip(), nsdl_match.groups()[2], nsdl_match.groups()[3])
 
@@ -83,8 +88,6 @@ def find_account_context(lines, mf_section_line):
 def extract_mf_holdings_data(lines, start_idx, target_account=None):
     """Extract MF holdings data with improved parsing."""
     holdings = []
-    isin_re_pattern = r"INF[0-9A-Z]{8}[0-9]"
-    amt_re = r"([(-]*[\d,.]+)\)*"
 
     # Track which lines we've processed to avoid duplicates
     processed_lines = set()
@@ -107,7 +110,7 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
             continue
 
         # Look for ISIN pattern
-        isin_match = re.search(isin_re_pattern, line)
+        isin_match = re.search(NSDL_ISIN_RE, line)
         if not isin_match:
             i += 1
             continue
@@ -117,25 +120,13 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
 
         # Try to extract the complete record
         # Pattern 1: Full detailed record (like from mf_folio_f section)
-        detailed_pattern = (
-            rf"({isin_re_pattern})\s*"  # ISIN
-            rf"(.+?)\s+"  # UCC (comes first in the data)
-            rf"(.+?)\s+"  # Name/Fund details (comes second)
-            rf"(\w+?)\s+"  # Folio
-            rf"{amt_re}\s+"  # Balance
-            rf"{amt_re}\s+"  # Avg cost
-            rf"{amt_re}\s+"  # Total cost
-            rf"{amt_re}\s+"  # NAV
-            rf"{amt_re}\s+"  # Value
-            rf"{amt_re}"  # PnL
-            rf"(?:\s+{amt_re})?\s*$"  # Optional returns
-        )
+        detailed_pattern = get_detailed_mf_pattern()
 
         # Try multi-line parsing for detailed records
         full_text = line
         for j in range(i + 1, min(i + 5, len(lines))):  # Look ahead up to 4 lines
             next_line = lines[j].strip()
-            if not next_line or re.search(isin_re_pattern, next_line):
+            if not next_line or re.search(NSDL_ISIN_RE, next_line):
                 break
             # Stop if we hit another account section
             if re.search(r'(CDSL|NSDL)\s+demat\s+account', next_line, re.I):
@@ -185,7 +176,7 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
                 continue
 
         # Pattern 2: Simple record (like from mutual_funds section)
-        simple_pattern = rf"({isin_re_pattern})\s+(.+?)\s+{amt_re}\s+{amt_re}\s+{amt_re}\s*$"
+        simple_pattern = get_simple_mf_pattern()
         simple_match = re.search(simple_pattern, line, re.I)
 
         if simple_match:
@@ -268,14 +259,6 @@ def process_nsdl_text(text):
     lines = text.split("\u2029")
 
     # Look for MF folio sections and associate them with the correct account
-    mf_section_patterns = [
-        r"^Mutual\s+Fund\s+Folios?\s*\(F\)\s*$",
-        r"^Mutual\s+Fund\s+Folios?\s*$",
-        r"^MF\s+Folios?\s*\(F\)\s*$",
-        r"^MF\s+Folios?\s*$",
-        r"Mutual\s+Fund.*Folios?",
-    ]
-
     for i, line in enumerate(lines):
         line_clean = line.strip()
         if not line_clean:
@@ -283,7 +266,7 @@ def process_nsdl_text(text):
 
         # Check if this line indicates an MF section
         is_mf_section = False
-        for pattern in mf_section_patterns:
+        for pattern in MF_SECTION_PATTERNS:
             if re.search(pattern, line_clean, flags=re.I):
                 is_mf_section = True
                 break
