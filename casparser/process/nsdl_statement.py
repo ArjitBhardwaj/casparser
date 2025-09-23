@@ -21,21 +21,16 @@ from .regex import (
 )
 
 
-# --- small helper ---
 def looks_like_corporate_bond(name: str) -> bool:
     """Heuristic: classify bond/NCD/NCB/debenture by name tokens."""
     if not name:
         return False
-    # Normalize: uppercase, collapse punctuation to spaces so hyphenated tokens match
     norm = re.sub(r"[^A-Z0-9]+", " ", name.upper()).strip()
     return re.search(BOND_NAME_RE, norm, flags=re.I) is not None
 
 
 def parse_header(text):
-    """
-    Parse CAS header data.
-    :param text: CAS text
-    """
+    """Parse CAS header data."""
     if m := re.search(
             DEMAT_STATEMENT_PERIOD_RE,
             text,
@@ -45,153 +40,171 @@ def parse_header(text):
     raise HeaderParseError("Error parsing CAS header")
 
 
-def detect_mf_folio_section(lines, start_idx=0):
-    """
-    Detect MF folio section with multiple pattern variations.
-    Returns (found, start_line_idx) tuple.
-    """
-    mf_section_patterns = [
-        r"^Mutual\s+Fund\s+Folios?\s*\(F\)\s*$",
-        r"^Mutual\s+Fund\s+Folios?\s*$",
-        r"^MF\s+Folios?\s*\(F\)\s*$",
-        r"^MF\s+Folios?\s*$",
-        r"^Folios?\s*\(F\)\s*$",
-        # More flexible patterns
-        r"Mutual\s+Fund.*Folios?",
-        r"MF.*Folios?",
-        # Pattern that might appear in headers
-        r"^\s*Mutual\s+Fund\s+Folios?\s+\d+\s+folios?\s+",
-        # Generic folio patterns
-        r"^.*Mutual.*Fund.*$",
-    ]
+def clean_fund_name(name):
+    """Clean fund name by removing embedded data."""
+    if not name:
+        return name
 
-    for i, line in enumerate(lines[start_idx:], start_idx):
-        line_clean = line.strip()
-        if not line_clean:
-            continue
+    # Remove patterns like "85,649.842 85,649.842 0.000 0.000 0.000 0.000 0.000 0.000"
+    name = re.sub(r'\s+[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+', '', name)
 
-        for pattern in mf_section_patterns:
-            if re.search(pattern, line_clean, flags=re.I):
-                print(f"DEBUG: Found MF section at line {i}: '{line_clean}' with pattern: '{pattern}'")
-                return True, i
+    # Remove patterns like "149091 UTI Focused Fund - Direct Plan 599339423935 49,997.50 0 10.0000 4,99,975.00"
+    name = re.sub(r'^[\w\d]+\s+(.+?)\s+[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+$', r'\1', name)
 
-    return False, -1
+    # Remove trailing numbers and spaces
+    name = re.sub(r'\s+[\d,.]+\s*$', '', name)
+
+    # Clean up extra whitespace
+    name = re.sub(r'\s+', ' ', name).strip()
+
+    return name
 
 
-def extract_mf_holdings_data(lines, start_idx):
-    """
-    Extract MF holdings data from lines starting at start_idx.
-    Uses multiple regex patterns and fallback parsing.
-    """
+def find_account_context(lines, mf_section_line):
+    """Find which account the MF section belongs to by looking backwards."""
+    # Look backwards from the MF section to find the most recent account header
+    for i in range(mf_section_line - 1, -1, -1):
+        line = lines[i].strip()
+
+        # Check for CDSL/NSDL account patterns
+        cdsl_match = re.search(r'(CDSL)\s+demat\s+account\s+(.+?)\s+DP\s+Id\s*:\s*(\d+)\s+Client\s+Id\s*:\s*(\d+)',
+                               line, re.I)
+        if cdsl_match:
+            return ('CDSL', cdsl_match.groups()[1].strip(), cdsl_match.groups()[2], cdsl_match.groups()[3])
+
+        nsdl_match = re.search(r'(NSDL)\s+demat\s+account\s+(.+?)\s+DP\s+Id\s*:\s*(.+?)\s+Client\s+Id\s*:\s*(\d+)',
+                               line, re.I)
+        if nsdl_match:
+            return ('NSDL', nsdl_match.groups()[1].strip(), nsdl_match.groups()[2], nsdl_match.groups()[3])
+
+    return None
+
+
+def extract_mf_holdings_data(lines, start_idx, target_account=None):
+    """Extract MF holdings data with improved parsing."""
     holdings = []
+    isin_re_pattern = r"INF[0-9A-Z]{8}[0-9]"
+    amt_re = r"([(-]*[\d,.]+)\)*"
 
-    # Multiple regex patterns for MF holdings
-    patterns = [
-        # Original pattern
-        NSDL_MF_HOLDINGS_RE,
-        # Alternative patterns with different whitespace handling
-        r"(INF[0-9A-Z]{8}[0-9])\s*\n?\s*(.+?)\s*\n?\s*(.+?)\s+(\w+?)\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)(?:\s+([\d,.]+))?\s*$",
-        # Simplified pattern
-        r"(INF[0-9A-Z]{8}[0-9])\s+(.+?)\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)\s*$",
-        # Tab-separated pattern
-        r"(INF[0-9A-Z]{8}[0-9])\t+(.+?)\t+([\d,.]+)\t+([\d,.]+)\t+([\d,.]+)",
-    ]
+    # Track which lines we've processed to avoid duplicates
+    processed_lines = set()
 
-    amt_re = r"([(-]*\d[\d,.]+)\)*"
-
-    for i, line in enumerate(lines[start_idx:], start_idx):
-        line_clean = line.strip()
-        if not line_clean:
+    i = start_idx
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line or i in processed_lines:
+            i += 1
             continue
+
+        # Stop if we hit another account section
+        if re.search(r'(CDSL|NSDL)\s+demat\s+account', line, re.I):
+            break
 
         # Skip non-data lines
-        if any(skip_word in line_clean.upper() for skip_word in
-               ['ACCOUNT', 'HOLDER', 'CLIENT', 'TOTAL', 'SUBTOTAL', 'GRAND']):
+        if any(skip_word in line.upper() for skip_word in
+               ['ACCOUNT', 'HOLDER', 'CLIENT', 'TOTAL', 'SUBTOTAL', 'GRAND', 'SUB TOTAL']):
+            i += 1
             continue
 
-        # Try each pattern
-        matched = False
-        for pattern_idx, pattern in enumerate(patterns):
-            try:
-                match = re.search(pattern, line, re.DOTALL | re.MULTILINE | re.I)
-                if match:
-                    groups = match.groups()
-                    print(f"DEBUG: Pattern {pattern_idx} matched line {i}: {len(groups)} groups")
+        # Look for ISIN pattern
+        isin_match = re.search(isin_re_pattern, line)
+        if not isin_match:
+            i += 1
+            continue
 
-                    if len(groups) >= 5:  # Minimum required fields
-                        isin = groups[0]
-                        name = re.sub(r"\s+", " ", groups[1]).strip()
-                        name = re.sub(r"[^a-zA-Z0-9_)]+$", "", name).strip()
+        isin = isin_match.group()
+        processed_lines.add(i)
 
-                        # Handle different group arrangements based on pattern
-                        if len(groups) >= 11:  # Full pattern
-                            ucc, folio, units, avg_cost, total_cost, nav, value, pnl = groups[2:10]
-                            returns = groups[10] if len(groups) > 10 else ""
-                        elif len(groups) >= 8:  # Medium pattern
-                            ucc, folio, units, avg_cost, nav, value, pnl = groups[2:9]
-                            total_cost = ""
-                            returns = groups[8] if len(groups) > 8 else ""
-                        elif len(groups) >= 5:  # Simplified pattern
-                            units, nav, value = groups[2:5]
-                            ucc = folio = avg_cost = total_cost = pnl = returns = ""
+        # Try to extract the complete record
+        # Pattern 1: Full detailed record (like from mf_folio_f section)
+        detailed_pattern = (
+            rf"({isin_re_pattern})\s*"  # ISIN
+            rf"(.+?)\s+"  # Name/Fund details
+            rf"(.+?)\s+"  # UCC
+            rf"(\w+?)\s+"  # Folio
+            rf"{amt_re}\s+"  # Balance
+            rf"{amt_re}\s+"  # Avg cost
+            rf"{amt_re}\s+"  # Total cost
+            rf"{amt_re}\s+"  # NAV
+            rf"{amt_re}\s+"  # Value
+            rf"{amt_re}"  # PnL
+            rf"(?:\s+{amt_re})?\s*$"  # Optional returns
+        )
 
-                        record = {
-                            "isin": isin,
-                            "ucc": (ucc or "").strip(),
-                            "name": name,
-                            "folio": (folio or "").strip(),
-                            "balance": units,
-                            "avg_cost": avg_cost or "",
-                            "total_cost": total_cost or "",
-                            "nav": nav,
-                            "value": value,
-                            "pnl": pnl or "",
-                            "return": returns or "",
-                        }
-                        holdings.append(record)
-                        print(f"DEBUG: Added MF holding: {name[:50]}...")
-                        matched = True
-                        break
+        # Try multi-line parsing for detailed records
+        full_text = line
+        for j in range(i + 1, min(i + 5, len(lines))):  # Look ahead up to 4 lines
+            next_line = lines[j].strip()
+            if not next_line or re.search(isin_re_pattern, next_line):
+                break
+            # Stop if we hit another account section
+            if re.search(r'(CDSL|NSDL)\s+demat\s+account', next_line, re.I):
+                break
+            full_text += " " + next_line
+            processed_lines.add(j)
 
-            except Exception as e:
-                print(f"DEBUG: Pattern {pattern_idx} failed on line {i}: {e}")
+        detailed_match = re.search(detailed_pattern, full_text, re.DOTALL | re.I)
+
+        if detailed_match:
+            groups = detailed_match.groups()
+            if len(groups) >= 10:
+                isin, raw_name, ucc, folio, balance, avg_cost, total_cost, nav, value, pnl = groups[:10]
+                returns = groups[10] if len(groups) > 10 else ""
+
+                # Clean the name field
+                name = clean_fund_name(raw_name)
+
+                # Skip if this looks like a summary line (corrupted data)
+                if re.search(r'[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+', name):
+                    i += 1
+                    continue
+
+                record = {
+                    "isin": isin,
+                    "ucc": (ucc or "").strip(),
+                    "name": name,
+                    "folio": (folio or "").strip(),
+                    "balance": balance.replace(",", "") if balance else "",
+                    "avg_cost": avg_cost.replace(",", "") if avg_cost else "",
+                    "total_cost": total_cost.replace(",", "") if total_cost else "",
+                    "nav": nav.replace(",", "") if nav else "",
+                    "value": value.replace(",", "") if value else "",
+                    "pnl": pnl.replace(",", "") if pnl else "",
+                    "return": returns.replace(",", "") if returns else "",
+                }
+                holdings.append(record)
+                i += 1
                 continue
 
-        if not matched:
-            # Try manual parsing for lines with ISIN
-            if re.search(r"INF[0-9A-Z]{8}[0-9]", line_clean):
-                print(f"DEBUG: Manual parsing attempt for line {i}: '{line_clean[:100]}...'")
-                try:
-                    # Simple manual extraction
-                    parts = re.split(r'\s+', line_clean)
-                    isin_part = None
-                    for part in parts:
-                        if re.match(r"INF[0-9A-Z]{8}[0-9]", part):
-                            isin_part = part
-                            break
+        # Pattern 2: Simple record (like from mutual_funds section)
+        simple_pattern = rf"({isin_re_pattern})\s+(.+?)\s+{amt_re}\s+{amt_re}\s+{amt_re}\s*$"
+        simple_match = re.search(simple_pattern, line, re.I)
 
-                    if isin_part:
-                        # Find numeric parts (likely balance, nav, value)
-                        numeric_parts = [p for p in parts if re.match(r"[\d,.]+", p)]
-                        if len(numeric_parts) >= 3:
-                            record = {
-                                "isin": isin_part,
-                                "ucc": "",
-                                "name": f"MF Fund {isin_part}",  # Placeholder name
-                                "folio": "",
-                                "balance": numeric_parts[0],
-                                "avg_cost": "",
-                                "total_cost": "",
-                                "nav": numeric_parts[-2] if len(numeric_parts) >= 2 else "",
-                                "value": numeric_parts[-1],
-                                "pnl": "",
-                                "return": "",
-                            }
-                            holdings.append(record)
-                            print(f"DEBUG: Manual extraction successful for {isin_part}")
+        if simple_match:
+            isin, raw_name, balance, nav, value = simple_match.groups()
+            name = clean_fund_name(raw_name)
 
-                except Exception as e:
-                    print(f"DEBUG: Manual parsing failed: {e}")
+            # Skip if this looks like corrupted data
+            if re.search(r'[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+', name):
+                i += 1
+                continue
+
+            record = {
+                "isin": isin,
+                "ucc": "",
+                "name": name,
+                "folio": "",
+                "balance": balance.replace(",", "") if balance else "",
+                "avg_cost": "",
+                "total_cost": "",
+                "nav": nav.replace(",", "") if nav else "",
+                "value": value.replace(",", "") if value else "",
+                "pnl": "",
+                "return": "",
+            }
+            holdings.append(record)
+
+        i += 1
 
     return holdings
 
@@ -226,40 +239,14 @@ def process_nsdl_text(text):
             "mf_folio_f": [],
             "corporate_bonds": [],
         }
+
+    # Only create standalone MF account if there are MF headers but no regular accounts
     for num_folios, _, balance in mutual_funds:
-        demat[(None, None)] = {
-            "name": "Mutual Fund Folios",
-            "folios": num_folios,
-            "balance": balance,
-            "type": "MF",
-            "dp_id": "",
-            "client_id": "",
-            "owners": [],
-            "equities": [],
-            "mutual_funds": [],
-            "mf_folio_f": [],
-            "corporate_bonds": [],
-        }
-
-    lines = text.split("\u2029")
-    start_processing_holdings = False
-    current_demat = None
-    demat_holders = []
-
-    print(f"DEBUG: Processing {len(lines)} lines")
-
-    # First pass: look for MF folio sections anywhere in the document
-    mf_found, mf_start_line = detect_mf_folio_section(lines)
-
-    if mf_found:
-        print(f"DEBUG: MF section detected at line {mf_start_line}")
-
-        # Ensure MF account exists
-        if (None, None) not in demat:
+        if not demat:  # Only if no other accounts exist
             demat[(None, None)] = {
                 "name": "Mutual Fund Folios",
-                "folios": "0",
-                "balance": "0.00",
+                "folios": num_folios,
+                "balance": balance,
                 "type": "MF",
                 "dp_id": "",
                 "client_id": "",
@@ -270,27 +257,73 @@ def process_nsdl_text(text):
                 "corporate_bonds": [],
             }
 
-        # Extract MF holdings data
-        mf_holdings = extract_mf_holdings_data(lines, mf_start_line + 1)
+    lines = text.split("\u2029")
 
-        if mf_holdings:
-            demat[(None, None)]["mf_folio_f"] = mf_holdings
-            # Also populate mutual_funds array
-            for record in mf_holdings:
-                demat[(None, None)]["mutual_funds"].append({
-                    "isin": record["isin"],
-                    "name": record["name"],
-                    "balance": record["balance"],
-                    "nav": record["nav"],
-                    "value": record["value"],
-                })
-            print(f"DEBUG: Added {len(mf_holdings)} MF holdings to account")
-        else:
-            print("DEBUG: No MF holdings data extracted despite finding section")
-    else:
-        print("DEBUG: No MF section detected in document")
+    # Look for MF folio sections and associate them with the correct account
+    mf_section_patterns = [
+        r"^Mutual\s+Fund\s+Folios?\s*\(F\)\s*$",
+        r"^Mutual\s+Fund\s+Folios?\s*$",
+        r"^MF\s+Folios?\s*\(F\)\s*$",
+        r"^MF\s+Folios?\s*$",
+        r"Mutual\s+Fund.*Folios?",
+    ]
 
-    # Continue with regular processing for other accounts
+    for i, line in enumerate(lines):
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+
+        # Check if this line indicates an MF section
+        is_mf_section = False
+        for pattern in mf_section_patterns:
+            if re.search(pattern, line_clean, flags=re.I):
+                is_mf_section = True
+                break
+
+        if is_mf_section:
+            # Find which account this MF section belongs to
+            account_context = find_account_context(lines, i)
+
+            if account_context:
+                account_type, account_name, dp_id, client_id = account_context
+                target_key = (dp_id, client_id)
+
+                # Extract MF holdings for this specific account
+                mf_holdings = extract_mf_holdings_data(lines, i + 1, target_key)
+
+                if mf_holdings and target_key in demat:
+                    # Separate detailed and simple records
+                    detailed_records = []
+                    simple_records = []
+
+                    for record in mf_holdings:
+                        # If has detailed folio info, it's a detailed record
+                        if record.get("folio") or record.get("ucc") or record.get("avg_cost"):
+                            detailed_records.append(record)
+                        else:
+                            # Create simple mutual fund record
+                            simple_records.append({
+                                "isin": record["isin"],
+                                "name": record["name"],
+                                "balance": record["balance"],
+                                "nav": record["nav"],
+                                "value": record["value"],
+                            })
+
+                    # Store detailed records in mf_folio_f
+                    demat[target_key]["mf_folio_f"].extend(detailed_records)
+
+                    # Store simple records in mutual_funds (avoiding duplicates)
+                    existing_isins = {mf.get("isin") for mf in demat[target_key]["mutual_funds"]}
+                    for simple_record in simple_records:
+                        if simple_record["isin"] not in existing_isins:
+                            demat[target_key]["mutual_funds"].append(simple_record)
+
+    # Continue with regular processing for other holdings
+    start_processing_holdings = False
+    current_demat = None
+    demat_holders = []
+
     for line in lines:
         if m := re.search(DEMAT_AC_TYPE_RE, line, flags=re.I):
             start_processing_holdings = True
@@ -319,7 +352,7 @@ def process_nsdl_text(text):
             continue
 
         # Process holdings for NSDL/CDSL accounts
-        if current_demat["type"] in ["NSDL", "NSDL Demat Account"]:
+        if current_demat and current_demat["type"] in ["NSDL", "NSDL Demat Account"]:
             # Try equity-like line
             if m := re.search(NSDL_EQ_RE, line, re.DOTALL | re.MULTILINE | re.I):
                 isin, name, face_value, num_shares, market_value, current_value = m.groups()
@@ -354,7 +387,7 @@ def process_nsdl_text(text):
                 })
                 continue
 
-        elif current_demat["type"] in ["CDSL", "CDSL Demat Account"]:
+        elif current_demat and current_demat["type"] in ["CDSL", "CDSL Demat Account"]:
             if m := re.search(NSDL_CDSL_HOLDINGS_RE, line, re.DOTALL | re.MULTILINE | re.I):
                 isin, name, balance, *_, nav, value = m.groups()
                 name_clean = re.sub(r"\s+", " ", name).strip()
@@ -394,7 +427,30 @@ def process_nsdl_text(text):
     # ISIN lookup for missing names
     with ISINDb() as isin_db:
         for account in cas_data.accounts:
-            # equities
+            # Fill missing names in mf_folio_f
+            for mf in getattr(account, "mf_folio_f", []):
+                if isinstance(mf, dict) and (
+                        not mf.get("name") or mf.get("name") in ["NOT", "M", "MFBRLA0028", "MFPRUI0072", "MFPRUI0058",
+                                                                 "MFPRUI0041", "MFKOTAK1233", "MFSBIM0043", "149091",
+                                                                 "MFRILC0011"]):
+                    isin_data = isin_db.isin_lookup(mf["isin"])
+                    if isin_data:
+                        mf["name"] = isin_data.name
+
+            # Fill missing names in mutual_funds
+            for mf in getattr(account, "mutual_funds", []):
+                if isinstance(mf, dict):
+                    # Clean corrupted names
+                    if mf.get("name") and re.search(r'[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+', mf["name"]):
+                        mf["name"] = clean_fund_name(mf["name"])
+
+                    # Fill missing names
+                    if not mf.get("name"):
+                        isin_data = isin_db.isin_lookup(mf["isin"])
+                        if isin_data:
+                            mf["name"] = isin_data.name
+
+            # Fill missing names in equities and bonds
             for equity in getattr(account, "equities", []):
                 name = equity.get("name") if isinstance(equity, dict) else getattr(equity, "name", None)
                 if not name:
@@ -404,7 +460,7 @@ def process_nsdl_text(text):
                             equity["name"] = isin_data.name
                         else:
                             equity.name = isin_data.name
-            # corporate bonds
+
             for bond in getattr(account, "corporate_bonds", []):
                 name = bond.get("name") if isinstance(bond, dict) else getattr(bond, "name", None)
                 if not name:
@@ -414,21 +470,5 @@ def process_nsdl_text(text):
                             bond["name"] = isin_data.name
                         else:
                             bond.name = isin_data.name
-            # MF holdings
-            for mf in getattr(account, "mf_folio_f", []):
-                if isinstance(mf, dict) and not mf.get("name"):
-                    isin_data = isin_db.isin_lookup(mf["isin"])
-                    if isin_data:
-                        mf["name"] = isin_data.name
-
-    # Final debug summary
-    print(f"DEBUG: Final summary:")
-    for account in cas_data.accounts:
-        acc_dict = account if isinstance(account, dict) else account.__dict__
-        mf_count = len(acc_dict.get("mf_folio_f", []))
-        eq_count = len(acc_dict.get("equities", []))
-        bond_count = len(acc_dict.get("corporate_bonds", []))
-        print(
-            f"  Account '{acc_dict.get('name', 'Unknown')}': {mf_count} MF folios, {eq_count} equities, {bond_count} bonds")
 
     return cas_data
