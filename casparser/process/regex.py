@@ -154,18 +154,30 @@ MF_SECTION_PATTERNS = [
 
 # MF holdings detailed pattern (for mf_folio_f sections)
 def get_detailed_mf_pattern():
+    """Pattern for detailed MF records (mf_folio_f section)"""
+    # This pattern matches the actual data structure from the 2025 format:
+    # ISIN + UCC + Fund Name + Folio + Balance + AvgCost + TotalCost + NAV + Value + PnL + Returns
     return (
-        rf"({NSDL_ISIN_RE})\s*"  # ISIN
-        rf"(.+?)\s+"  # UCC (comes first in the data)
-        rf"(.+?)\s+"  # Name/Fund details (comes second)
-        rf"(\w+?)\s+"  # Folio
-        rf"{NSDL_AMT_RE}\s+"  # Balance
-        rf"{NSDL_AMT_RE}\s+"  # Avg cost
-        rf"{NSDL_AMT_RE}\s+"  # Total cost
-        rf"{NSDL_AMT_RE}\s+"  # NAV
-        rf"{NSDL_AMT_RE}\s+"  # Value
-        rf"{NSDL_AMT_RE}"  # PnL
-        rf"(?:\s+{NSDL_AMT_RE})?\s*$"  # Optional returns
+        r'([A-Z0-9]{12})'  # ISIN
+        r'\s+'
+        r'([A-Z0-9/\s]*?)'  # UCC (optional, can be "NOT AVAILABLE")
+        r'\s+'
+        r'(.+?)'  # Fund name
+        r'\s+'
+        r'(\d+(?:\.\d+)?)'  # Folio number
+        r'\s+'
+        r'([\d,]+\.?\d*)'  # Balance (units)
+        r'\s+'
+        r'([\d,]+\.?\d*)'  # Average cost per unit
+        r'\s+'
+        r'([\d,]+\.?\d*)'  # Total cost
+        r'\s+'
+        r'([\d,]+\.?\d*)'  # Current NAV
+        r'\s+'
+        r'([\d,]+\.?\d*)'  # Current value
+        r'\s+'
+        r'([\d,]+\.?\d*)'  # Profit/Loss
+        r'(?:\s+([\d,]+\.?\d*))?'  # Returns percentage (optional)
     )
 
 # MF holdings simple pattern (for mutual_funds sections)

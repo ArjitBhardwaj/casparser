@@ -58,11 +58,24 @@ def clean_fund_name(name):
     # Remove patterns like "149091 UTI Focused Fund - Direct Plan 599339423935 49,997.50 0 10.0000 4,99,975.00"
     name = re.sub(r'^[\w\d]+\s+(.+?)\s+[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+$', r'\1', name)
 
+    # Remove standalone folio numbers at the beginning or end
+    name = re.sub(r'^\d{8,15}\s+', '', name)  # Remove folio at start
+    name = re.sub(r'\s+\d{8,15}$', '', name)  # Remove folio at end
+
     # Remove trailing numbers and spaces
     name = re.sub(r'\s+[\d,.]+\s*$', '', name)
 
+    # Remove common data patterns that might be embedded
+    name = re.sub(r'\s+\d+\.\d+\s+\d+\.\d+\s+[\d,]+\.?\d*', '', name)
+
+    # Remove UCC patterns that might be embedded
+    name = re.sub(r'\s+(NOT AVAILABLE|MFAXIS\d+|MF/\d+/\d+/\d+/\d+|MFPRUI\d+)\s*', ' ', name)
+
     # Clean up extra whitespace
     name = re.sub(r'\s+', ' ', name).strip()
+
+    # Remove leading/trailing punctuation that might be artifacts
+    name = re.sub(r'^[^\w]+|[^\w]+$', '', name)
 
     return name
 
@@ -118,50 +131,96 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
         isin = isin_match.group()
         processed_lines.add(i)
 
-        # Try to extract the complete record
-        # Pattern 1: Full detailed record (like from mf_folio_f section)
-        detailed_pattern = get_detailed_mf_pattern()
+        # For 2025 format, the data is spread across multiple lines in a specific pattern:
+        # Line 1: ISIN + UCC + Fund Name + Folio
+        # Line 2: Balance + AvgCost + TotalCost + NAV + Value + PnL + Return
 
-        # Try multi-line parsing for detailed records
+        # Try to extract the complete record
         full_text = line
-        for j in range(i + 1, min(i + 5, len(lines))):  # Look ahead up to 4 lines
+        lines_consumed = 1
+
+        # Look ahead to gather all related lines
+        for j in range(i + 1, min(i + 8, len(lines))):
             next_line = lines[j].strip()
-            if not next_line or re.search(NSDL_ISIN_RE, next_line):
+            if not next_line:
+                continue
+            # Stop if we hit another ISIN
+            if re.search(NSDL_ISIN_RE, next_line):
                 break
             # Stop if we hit another account section
             if re.search(r'(CDSL|NSDL)\s+demat\s+account', next_line, re.I):
                 break
             full_text += " " + next_line
-            processed_lines.add(j)
+            lines_consumed += 1
+
+        # Mark consumed lines as processed
+        for j in range(i, i + lines_consumed):
+            if j < len(lines):
+                processed_lines.add(j)
+
+        # Try the detailed pattern for mf_folio_f sections
+        # Pattern matches: ISIN UCC Name Folio Balance [SKIP_FIELD] AvgCost TotalCost NAV Value PnL Return
+        detailed_pattern = (
+            rf'({NSDL_ISIN_RE})'  # ISIN
+            rf'\s+([A-Z0-9/\s]*?)'  # UCC (can be "NOT AVAILABLE")  
+            rf'\s+(.+?)'  # Fund name
+            rf'\s+(\d+(?:\.\d+)?)'  # Folio number
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Balance (units)
+            rf'\s+[\d,]+(?:\.\d+)?'  # SKIP: Extra field (internal reference number)
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Average cost
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Total cost
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Current NAV
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Current value
+            rf'\s+([\d,]+(?:\.\d+)?)'  # P&L
+            rf'(?:\s+([\d,]+(?:\.\d+)?))?'  # Returns (optional)
+        )
 
         detailed_match = re.search(detailed_pattern, full_text, re.DOTALL | re.I)
 
         if detailed_match:
             groups = detailed_match.groups()
-            if len(groups) >= 10:
-                isin, raw_ucc, raw_name, folio, balance, avg_cost, total_cost, nav, value, pnl = groups[:10]
+            if len(groups) >= 9:  # Need at least 9 fields for detailed record (skipping one field)
+                isin, raw_ucc, raw_name, folio, balance, avg_cost, total_cost, nav, value = groups[:9]
+                pnl = groups[9] if len(groups) > 9 else ""
                 returns = groups[10] if len(groups) > 10 else ""
 
                 # Clean the name and ucc fields
                 name = clean_fund_name(raw_name)
                 ucc = (raw_ucc or "").strip()
 
-                # Handle "NOT AVAILABLE" case - sometimes it gets split across UCC and name
-                if ucc == "NOT" and name.startswith("AVAILABLE"):
+                # Handle "NOT AVAILABLE" case properly
+                if "NOT AVAILABLE" in ucc:
+                    ucc = "NOT AVAILABLE"
+                elif ucc == "NOT" and name.startswith("AVAILABLE"):
                     ucc = "NOT AVAILABLE"
                     name = name.replace("AVAILABLE", "").strip()
-                    # Clean up any extra whitespace or tab characters
-                    name = re.sub(r'^\s+', '', name)
+                elif not ucc and "NOT AVAILABLE" in name:
+                    if name.startswith("NOT AVAILABLE"):
+                        ucc = "NOT AVAILABLE"
+                        name = name.replace("NOT AVAILABLE", "").strip()
+
+                # Clean up the name
+                name = re.sub(r'^\s+', '', name)
 
                 # Skip if this looks like a summary line (corrupted data)
                 if re.search(r'[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+', name):
-                    i += 1
+                    i += lines_consumed
+                    continue
+
+                # Validate that we have reasonable data
+                try:
+                    balance_val = float(balance.replace(",", ""))
+                    if balance_val <= 0:
+                        i += lines_consumed
+                        continue
+                except (ValueError, AttributeError):
+                    i += lines_consumed
                     continue
 
                 record = {
-                    "name": name,  # FIXED: Now correctly assigned
+                    "name": name,
                     "isin": isin,
-                    "ucc": ucc,  # FIXED: Now correctly assigned
+                    "ucc": ucc if ucc else "NOT AVAILABLE",
                     "folio": (folio or "").strip(),
                     "balance": balance.replace(",", "") if balance else "",
                     "avg_cost": avg_cost.replace(",", "") if avg_cost else "",
@@ -172,12 +231,12 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
                     "return": returns.replace(",", "") if returns else "",
                 }
                 holdings.append(record)
-                i += 1
+                i += lines_consumed
                 continue
 
         # Pattern 2: Simple record (like from mutual_funds section)
         simple_pattern = get_simple_mf_pattern()
-        simple_match = re.search(simple_pattern, line, re.I)
+        simple_match = re.search(simple_pattern, full_text, re.I)
 
         if simple_match:
             isin, raw_name, balance, nav, value = simple_match.groups()
@@ -185,11 +244,11 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
 
             # Skip if this looks like corrupted data
             if re.search(r'[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+', name):
-                i += 1
+                i += lines_consumed
                 continue
 
             record = {
-                "name": name,  # Correctly assigned
+                "name": name,
                 "isin": isin,
                 "ucc": "",
                 "folio": "",
@@ -203,7 +262,7 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None):
             }
             holdings.append(record)
 
-        i += 1
+        i += lines_consumed
 
     return holdings
 
