@@ -181,7 +181,7 @@ def find_account_context(lines, mf_section_line):
 
 
 def extract_mf_holdings_data(lines, start_idx, target_account=None, statement_year=None):
-    """Extract MF holdings data with improved parsing."""
+    """Extract MF holdings data with improved parsing that handles optional fields."""
     holdings = []
 
     # Track which lines we've processed to avoid duplicates
@@ -235,55 +235,62 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None, statement_ye
             if j < len(lines):
                 processed_lines.add(j)
 
-        # Use different parsing logic based on the year
-        if statement_year < 2025:
-            # Pre-2025 format: ISIN UCC Name Folio Balance AvgCost TotalCost NAV Value PnL Return
-            detailed_pattern = (
-                rf'({NSDL_ISIN_RE})'  # ISIN
-                rf'\s+([A-Z0-9/\s]*?)'  # UCC (can be "NOT AVAILABLE")  
-                rf'\s+(.+?)'  # Fund name
-                rf'\s+(\d+(?:\.\d+)?)'  # Folio number
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Balance (units)
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Average cost
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Total cost
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Current NAV
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Current value
-                rf'\s+([\d,]+(?:\.\d+)?)'  # P&L
-                rf'(?:\s+([\d,]+(?:\.\d+)?))?'  # Returns (optional)
-            )
+        # Define both patterns upfront
+        detailed_pattern_with_extra = (
+            rf'({NSDL_ISIN_RE})'  # ISIN
+            rf'\s+([A-Z0-9/\s]*?)'  # UCC (can be "NOT AVAILABLE")  
+            rf'\s+(.+?)'  # Fund name
+            rf'\s+(\d+(?:\.\d+)?)'  # Folio number
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Balance (units)
+            rf'\s+[\d,]+(?:\.\d+)?'  # SKIP: Extra field (internal reference number)
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Average cost
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Total cost
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Current NAV
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Current value
+            rf'\s+([\d,]+(?:\.\d+)?)'  # P&L
+            rf'(?:\s+([\d,]+(?:\.\d+)?))?'  # Returns (optional)
+        )
 
-            detailed_match = re.search(detailed_pattern, full_text, re.DOTALL | re.I)
+        detailed_pattern_without_extra = (
+            rf'({NSDL_ISIN_RE})'  # ISIN
+            rf'\s+([A-Z0-9/\s]*?)'  # UCC (can be "NOT AVAILABLE")  
+            rf'\s+(.+?)'  # Fund name
+            rf'\s+(\d+(?:\.\d+)?)'  # Folio number
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Balance (units)
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Average cost
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Total cost
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Current NAV
+            rf'\s+([\d,]+(?:\.\d+)?)'  # Current value
+            rf'\s+([\d,]+(?:\.\d+)?)'  # P&L
+            rf'(?:\s+([\d,]+(?:\.\d+)?))?'  # Returns (optional)
+        )
+
+        # Try to parse with flexible field matching
+        detailed_match = None
+        groups = None
+
+        # First, try the newer format with the extra field (2025+)
+        detailed_match_with_extra = re.search(detailed_pattern_with_extra, full_text, re.DOTALL | re.I)
+
+        # If the first pattern fails, try the older format without the extra field
+        if not detailed_match_with_extra:
+            detailed_match = re.search(detailed_pattern_without_extra, full_text, re.DOTALL | re.I)
             if detailed_match:
                 groups = detailed_match.groups()
                 if len(groups) >= 10:
                     isin, raw_ucc, raw_name, folio, balance, avg_cost, total_cost, nav, value, pnl = groups[:10]
                     returns = groups[10] if len(groups) > 10 else ""
         else:
-            # 2025+ format: ISIN UCC Name Folio Balance [SKIP_FIELD] AvgCost TotalCost NAV Value PnL Return
-            detailed_pattern = (
-                rf'({NSDL_ISIN_RE})'  # ISIN
-                rf'\s+([A-Z0-9/\s]*?)'  # UCC (can be "NOT AVAILABLE")  
-                rf'\s+(.+?)'  # Fund name
-                rf'\s+(\d+(?:\.\d+)?)'  # Folio number
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Balance (units)
-                rf'\s+[\d,]+(?:\.\d+)?'  # SKIP: Extra field (internal reference number)
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Average cost
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Total cost
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Current NAV
-                rf'\s+([\d,]+(?:\.\d+)?)'  # Current value
-                rf'\s+([\d,]+(?:\.\d+)?)'  # P&L
-                rf'(?:\s+([\d,]+(?:\.\d+)?))?'  # Returns (optional)
-            )
+            # Use the match with extra field
+            detailed_match = detailed_match_with_extra
+            groups = detailed_match.groups()
+            if len(groups) >= 9:
+                isin, raw_ucc, raw_name, folio, balance, avg_cost, total_cost, nav, value = groups[:9]
+                pnl = groups[9] if len(groups) > 9 else ""
+                returns = groups[10] if len(groups) > 10 else ""
 
-            detailed_match = re.search(detailed_pattern, full_text, re.DOTALL | re.I)
-            if detailed_match:
-                groups = detailed_match.groups()
-                if len(groups) >= 9:
-                    isin, raw_ucc, raw_name, folio, balance, avg_cost, total_cost, nav, value = groups[:9]
-                    pnl = groups[9] if len(groups) > 9 else ""
-                    returns = groups[10] if len(groups) > 10 else ""
-
-        if detailed_match and 'groups' in locals():
+        # Additional validation: Check if the parsed values make sense
+        if detailed_match and groups:
             # Clean the name and ucc fields
             name = clean_fund_name(raw_name)
             ucc = (raw_ucc or "").strip()
@@ -307,12 +314,58 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None, statement_ye
                 i += lines_consumed
                 continue
 
-            # Validate that we have reasonable data
+            # Additional validation: Check if NAV and value make sense
             try:
                 balance_val = float(balance.replace(",", ""))
+                nav_val = float(nav.replace(",", "")) if nav else 0
+                value_val = float(value.replace(",", "")) if value else 0
+
+                # Basic sanity check: if balance * nav is roughly equal to value
+                if balance_val > 0 and nav_val > 0 and value_val > 0:
+                    calculated_value = balance_val * nav_val
+                    # Allow for some variance due to rounding
+                    if abs(calculated_value - value_val) / value_val > 0.1:  # More than 10% difference
+                        # This might indicate wrong field mapping, try the other pattern
+                        if detailed_match == detailed_match_with_extra:
+                            # Try without extra field
+                            detailed_match_alt = re.search(detailed_pattern_without_extra, full_text, re.DOTALL | re.I)
+                            if detailed_match_alt:
+                                groups_alt = detailed_match_alt.groups()
+                                if len(groups_alt) >= 10:
+                                    # Re-assign with the alternative pattern
+                                    isin, raw_ucc, raw_name, folio, balance, avg_cost, total_cost, nav, value, pnl = groups_alt[
+                                                                                                                     :10]
+                                    returns = groups_alt[10] if len(groups_alt) > 10 else ""
+
+                                    # Revalidate
+                                    balance_val_alt = float(balance.replace(",", ""))
+                                    nav_val_alt = float(nav.replace(",", "")) if nav else 0
+                                    value_val_alt = float(value.replace(",", "")) if value else 0
+                                    calculated_value_alt = balance_val_alt * nav_val_alt
+
+                                    if nav_val_alt > 0 and value_val_alt > 0 and abs(
+                                            calculated_value_alt - value_val_alt) / value_val_alt <= 0.1:
+                                        # This pattern works better, use it
+                                        name = clean_fund_name(raw_name)
+                                        ucc = (raw_ucc or "").strip()
+
+                                        if "NOT AVAILABLE" in ucc:
+                                            ucc = "NOT AVAILABLE"
+                                        elif ucc == "NOT" and name.startswith("AVAILABLE"):
+                                            ucc = "NOT AVAILABLE"
+                                            name = name.replace("AVAILABLE", "").strip()
+                                        elif not ucc and "NOT AVAILABLE" in name:
+                                            if name.startswith("NOT AVAILABLE"):
+                                                ucc = "NOT AVAILABLE"
+                                                name = name.replace("NOT AVAILABLE", "").strip()
+
+                                        name = re.sub(r'^\s+', '', name)
+
+                # Skip if balance is 0 or negative
                 if balance_val <= 0:
                     i += lines_consumed
                     continue
+
             except (ValueError, AttributeError):
                 i += lines_consumed
                 continue
@@ -365,7 +418,6 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None, statement_ye
         i += lines_consumed
 
     return holdings
-
 
 def process_nsdl_text(text):
     hdr_data = parse_header(text[:1000])
