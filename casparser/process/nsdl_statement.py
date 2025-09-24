@@ -236,7 +236,7 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None, statement_ye
                 processed_lines.add(j)
 
         # Use different parsing logic based on the year
-        if statement_year and int(statement_year) < 2025:
+        if statement_year < 2025:
             # Pre-2025 format: ISIN UCC Name Folio Balance AvgCost TotalCost NAV Value PnL Return
             detailed_pattern = (
                 rf'({NSDL_ISIN_RE})'  # ISIN
@@ -374,9 +374,11 @@ def process_nsdl_text(text):
     # Extract year from statement period to determine parsing logic
     statement_year = None
     try:
-        statement_year = hdr_data["to"].split("-")[-1]
-    except:
-        statement_year = "2021"  # Default to older format
+        statement_year = int(hdr_data["to"].split("-")[-1])
+    except (KeyError, ValueError, IndexError):
+        # If we can't parse the year, default to newer format (2025+) to be safe
+        # This ensures we use the more robust parsing logic by default
+        statement_year = 2025
 
     accounts = re.findall(
         DEMAT_HEADER_RE,
