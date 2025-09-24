@@ -50,6 +50,66 @@ def clean_equity_name(name: str) -> str:
     return name.strip()
 
 
+def is_valid_fund_name(name: str) -> bool:
+    """
+    Check if a fund name is valid (not corrupted/incomplete).
+    Returns True if the name appears to be a valid fund name.
+    """
+    if not name or not isinstance(name, str):
+        return False
+
+    name = name.strip()
+
+    # Empty or very short names are invalid
+    if len(name) < 3:
+        return False
+
+    # Names that are just numbers or mostly numbers are invalid
+    if re.match(r'^[\d\s,.]+$', name):
+        return False
+
+    # Names that look like UCC codes, folio numbers, or technical identifiers
+    ucc_patterns = [
+        r'^MF[A-Z0-9]+$',  # MFBRLA0028, MFPRUI0072, etc.
+        r'^[A-Z]{2,6}\d{4,}$',  # Technical codes like MFPRUI0058
+        r'^\d{6,}$',  # Pure folio numbers like 149091
+        r'^[A-Z]{1,3}$',  # Very short codes like "M", "NOT"
+        r'^NOT\s+AVAILABLE$',  # "NOT AVAILABLE"
+        r'^AVAILABLE$',  # Partial "NOT AVAILABLE"
+    ]
+
+    for pattern in ucc_patterns:
+        if re.match(pattern, name.upper()):
+            return False
+
+    # Names that are mostly data patterns (multiple sequences of numbers/commas)
+    if re.search(r'[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+', name):
+        return False
+
+    # Names that contain excessive numeric data
+    numeric_ratio = len(re.findall(r'[\d,.]', name)) / len(name)
+    if numeric_ratio > 0.5:  # If more than 50% is numbers/punctuation
+        return False
+
+    # Check for minimum word content
+    words = re.findall(r'[A-Za-z]+', name)
+    if len(words) < 2 and len(name) < 10:  # Very short with < 2 words
+        return False
+
+    # Names that are just common suffixes without company name
+    suffix_only_patterns = [
+        r'^(LIMITED|LTD|CORPORATION|CORP|FUND|MUTUAL)$',
+        r'^(INDIA|PRIVATE|PVT|PUBLIC)$',
+        r'^(SERVICES?|TECHNOLOGIES?|INDUSTRIES?)$',
+    ]
+
+    for pattern in suffix_only_patterns:
+        if re.match(pattern, name.upper()):
+            return False
+
+    return True
+
+
 def looks_like_corporate_bond(name: str) -> bool:
     """Heuristic: classify bond/NCD/NCB/debenture by name tokens."""
     if not name:
@@ -529,10 +589,7 @@ def process_nsdl_text(text):
         for account in cas_data.accounts:
             # Fill missing names in mf_folio_f
             for mf in getattr(account, "mf_folio_f", []):
-                if isinstance(mf, dict) and (
-                        not mf.get("name") or mf.get("name") in ["NOT", "M", "MFBRLA0028", "MFPRUI0072", "MFPRUI0058",
-                                                                 "MFPRUI0041", "MFKOTAK1233", "MFSBIM0043", "149091",
-                                                                 "MFRILC0011"]):
+                if isinstance(mf, dict) and not is_valid_fund_name(mf.get("name")):
                     isin_data = isin_db.isin_lookup(mf["isin"])
                     if isin_data:
                         mf["name"] = isin_data.name
@@ -540,12 +597,14 @@ def process_nsdl_text(text):
             # Fill missing names in mutual_funds
             for mf in getattr(account, "mutual_funds", []):
                 if isinstance(mf, dict):
-                    # Clean corrupted names
-                    if mf.get("name") and re.search(r'[\d,.]+ [\d,.]+ [\d,.]+ [\d,.]+', mf["name"]):
-                        mf["name"] = clean_fund_name(mf["name"])
+                    # Clean corrupted names first
+                    if mf.get("name"):
+                        cleaned_name = clean_fund_name(mf["name"])
+                        if cleaned_name != mf["name"]:
+                            mf["name"] = cleaned_name
 
-                    # Fill missing names
-                    if not mf.get("name"):
+                    # Fill missing or invalid names
+                    if not is_valid_fund_name(mf.get("name")):
                         isin_data = isin_db.isin_lookup(mf["isin"])
                         if isin_data:
                             mf["name"] = isin_data.name
@@ -553,22 +612,24 @@ def process_nsdl_text(text):
             # Fill missing names in equities and bonds
             for equity in getattr(account, "equities", []):
                 name = equity.get("name") if isinstance(equity, dict) else getattr(equity, "name", None)
-                if not name:
+                if not is_valid_fund_name(name):  # Using same validation for consistency
                     isin_data = isin_db.isin_lookup(equity["isin"] if isinstance(equity, dict) else equity.isin)
                     if isin_data:
+                        clean_name = clean_equity_name(isin_data.name)
                         if isinstance(equity, dict):
-                            equity["name"] = clean_equity_name(isin_data.name)  # Apply cleaning here too
+                            equity["name"] = clean_name
                         else:
-                            equity.name = clean_equity_name(isin_data.name)  # Apply cleaning here too
+                            equity.name = clean_name
 
             for bond in getattr(account, "corporate_bonds", []):
                 name = bond.get("name") if isinstance(bond, dict) else getattr(bond, "name", None)
-                if not name:
+                if not is_valid_fund_name(name):  # Using same validation for consistency
                     isin_data = isin_db.isin_lookup(bond["isin"] if isinstance(bond, dict) else bond.isin)
                     if isin_data:
+                        clean_name = clean_equity_name(isin_data.name)
                         if isinstance(bond, dict):
-                            bond["name"] = clean_equity_name(isin_data.name)  # Apply cleaning here too
+                            bond["name"] = clean_name
                         else:
-                            bond.name = clean_equity_name(isin_data.name)  # Apply cleaning here too
+                            bond.name = clean_name
 
     return cas_data
