@@ -50,6 +50,29 @@ def clean_equity_name(name: str) -> str:
     return name.strip()
 
 
+def clean_corporate_bond_name(name: str) -> str:
+    """Clean corporate bond name by preserving the full name and replacing \t and \n with spaces."""
+    if not name:
+        return name
+
+    # Go through the name character by character and replace \t and \n with spaces
+    cleaned_chars = []
+    for char in name:
+        if char == '\t' or char == '\n':
+            cleaned_chars.append(' ')
+        else:
+            cleaned_chars.append(char)
+
+    clean_name = ''.join(cleaned_chars)
+
+    # Clean up multiple spaces
+    clean_name = ' '.join(clean_name.split())
+
+    # Remove leading/trailing whitespace
+    clean_name = clean_name.strip()
+
+    return clean_name
+
 def is_valid_fund_name(name: str) -> bool:
     """
     Check if a fund name is valid (not corrupted/incomplete).
@@ -110,12 +133,72 @@ def is_valid_fund_name(name: str) -> bool:
     return True
 
 
-def looks_like_corporate_bond(name: str) -> bool:
-    """Heuristic: classify bond/NCD/NCB/debenture by name tokens."""
+def enhanced_looks_like_corporate_bond(name: str) -> bool:
+    """
+    Enhanced heuristic to classify bond/NCD/NCB/debenture by name tokens.
+    More comprehensive detection of corporate bonds.
+    """
     if not name:
         return False
-    norm = re.sub(r"[^A-Z0-9]+", " ", name.upper()).strip()
-    return re.search(BOND_NAME_RE, norm, flags=re.I) is not None
+
+    # Normalize the name for pattern matching
+    norm = re.sub(r"[^A-Z0-9\s]+", " ", name.upper()).strip()
+
+    # Primary bond indicators - strong signals
+    primary_indicators = [
+        r'\bBOND\b', r'\bBONDS\b', r'\bDEBENTURE\b', r'\bDEBENTURES\b',
+        r'\bNCD\b', r'\bNCB\b', r'\bFIXED\s+INTEREST\b',
+        r'\bTAX\s*-?\s*FREE\b', r'\bTAX\s+FREE\b'
+    ]
+
+    # Secondary indicators - supportive but not definitive alone
+    secondary_indicators = [
+        r'\bCORPORATION\b', r'\bDEVELOPMENT\b', r'\bFINANCE\b',
+        r'\bHOUSING\b', r'\bURBAN\b', r'\bINDUSTRIES\b',
+        r'\b\d+\.\d+%?\b',  # Interest rates like 8.10, 8.00%
+        r'\b\d{2}-[A-Z]{3}\b',  # Date patterns like 05-Mar, 23-Feb
+        r'\bONCE\s+A\s+YEAR\b'
+    ]
+
+    # Check for primary indicators
+    primary_matches = sum(1 for pattern in primary_indicators if re.search(pattern, norm))
+
+    # Check for secondary indicators
+    secondary_matches = sum(1 for pattern in secondary_indicators if re.search(pattern, norm))
+
+    # Decision logic:
+    # - If we have any primary indicator, it's likely a bond
+    # - If we have multiple (3+) secondary indicators, it's likely a bond
+    # - Special case: if it contains both CORPORATION and DEVELOPMENT and numbers, likely a bond
+    if primary_matches > 0:
+        return True
+
+    if secondary_matches >= 3:
+        return True
+
+    # Special case for development corporations with numerical patterns
+    if (re.search(r'\bCORPORATION\b', norm) and
+            re.search(r'\bDEVELOPMENT\b', norm) and
+            re.search(r'\b\d+\.\d+\b', norm)):
+        return True
+
+    # Check for specific corporate bond naming patterns
+    corp_bond_patterns = [
+        r'LIMITED\s+FIXED\s+INTEREST',
+        r'CORPORATION\s+LIMITED\s+FIXED',
+        r'DEVELOPMENT\s+CORPORATION\s+LIMITED'
+    ]
+
+    for pattern in corp_bond_patterns:
+        if re.search(pattern, norm):
+            return True
+
+    return False
+
+
+def looks_like_corporate_bond(name: str) -> bool:
+    """Wrapper function to maintain backward compatibility."""
+    return enhanced_looks_like_corporate_bond(name)
 
 
 def parse_header(text):
@@ -419,6 +502,7 @@ def extract_mf_holdings_data(lines, start_idx, target_account=None, statement_ye
 
     return holdings
 
+
 def process_nsdl_text(text):
     hdr_data = parse_header(text[:1000])
     statement_period = StatementPeriod(from_=hdr_data["from"], to=hdr_data["to"])
@@ -567,10 +651,19 @@ def process_nsdl_text(text):
             # Try equity-like line
             if m := re.search(NSDL_EQ_RE, line, re.DOTALL | re.MULTILINE | re.I):
                 isin, name, face_value, num_shares, market_value, current_value = m.groups()
-                name_clean = clean_equity_name(name)  # Apply equity name cleaning
+
+                # First determine if this is a corporate bond
+                is_bond = enhanced_looks_like_corporate_bond(name)
+
+                # Use appropriate cleaning function based on type
+                if is_bond:
+                    name_clean = clean_corporate_bond_name(name)
+                else:
+                    name_clean = clean_equity_name(name)
+
                 name_clean = re.sub(r"\s+", " ", name_clean).strip()
 
-                if looks_like_corporate_bond(name_clean):
+                if is_bond:
                     current_demat["corporate_bonds"].append({
                         "isin": isin,
                         "name": name_clean,
@@ -603,10 +696,10 @@ def process_nsdl_text(text):
         elif current_demat and current_demat["type"] in ["CDSL", "CDSL Demat Account"]:
             if m := re.search(NSDL_CDSL_HOLDINGS_RE, line, re.DOTALL | re.MULTILINE | re.I):
                 isin, name, balance, *_, nav, value = m.groups()
-                name_clean = clean_equity_name(name)  # Apply equity name cleaning
-                name_clean = re.sub(r"\s+", " ", name_clean).strip()
 
                 if isin.startswith("INF"):
+                    # It's a mutual fund
+                    name_clean = re.sub(r"\s+", " ", name).strip()
                     current_demat["mutual_funds"].append({
                         "isin": isin,
                         "name": name_clean,
@@ -615,7 +708,18 @@ def process_nsdl_text(text):
                         "value": value,
                     })
                 elif isin.startswith("INE"):
-                    if looks_like_corporate_bond(name_clean):
+                    # Could be equity or corporate bond
+                    is_bond = enhanced_looks_like_corporate_bond(name)
+
+                    # Use appropriate cleaning function
+                    if is_bond:
+                        name_clean = clean_corporate_bond_name(name)
+                    else:
+                        name_clean = clean_equity_name(name)
+
+                    name_clean = re.sub(r"\s+", " ", name_clean).strip()
+
+                    if is_bond:
                         current_demat["corporate_bonds"].append({
                             "isin": isin,
                             "name": name_clean,
@@ -663,10 +767,10 @@ def process_nsdl_text(text):
                         if isin_data:
                             mf["name"] = isin_data.name
 
-            # Fill missing names in equities and bonds
+            # Fill missing names in equities (use equity cleaning)
             for equity in getattr(account, "equities", []):
                 name = equity.get("name") if isinstance(equity, dict) else getattr(equity, "name", None)
-                if not is_valid_fund_name(name):  # Using same validation for consistency
+                if not is_valid_fund_name(name):
                     isin_data = isin_db.isin_lookup(equity["isin"] if isinstance(equity, dict) else equity.isin)
                     if isin_data:
                         clean_name = clean_equity_name(isin_data.name)
@@ -675,12 +779,13 @@ def process_nsdl_text(text):
                         else:
                             equity.name = clean_name
 
+            # Fill missing names in corporate bonds (use corporate bond cleaning)
             for bond in getattr(account, "corporate_bonds", []):
                 name = bond.get("name") if isinstance(bond, dict) else getattr(bond, "name", None)
-                if not is_valid_fund_name(name):  # Using same validation for consistency
+                if not is_valid_fund_name(name):
                     isin_data = isin_db.isin_lookup(bond["isin"] if isinstance(bond, dict) else bond.isin)
                     if isin_data:
-                        clean_name = clean_equity_name(isin_data.name)
+                        clean_name = clean_corporate_bond_name(isin_data.name)
                         if isinstance(bond, dict):
                             bond["name"] = clean_name
                         else:
