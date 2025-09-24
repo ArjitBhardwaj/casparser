@@ -11,7 +11,6 @@ from .regex import (
     DEMAT_DP_ID_RE,
     DEMAT_HEADER_RE,
     DEMAT_MF_HEADER_RE,
-    DEMAT_MF_TYPE_RE,
     DEMAT_STATEMENT_PERIOD_RE,
     NSDL_CDSL_HOLDINGS_RE,
     NSDL_EQ_RE,
@@ -26,6 +25,29 @@ from .regex import (
     get_detailed_mf_pattern,
     get_simple_mf_pattern,
 )
+
+
+def clean_equity_name(name: str) -> str:
+    """Clean equity name by removing text before first \t\t and all \t\t sequences."""
+    if not name:
+        return name
+
+    # Find the first occurrence of \t\t
+    if '\t\t' in name:
+        # Split by first \t\t and take everything after it
+        first_tab_index = name.find('\t\t')
+        company_name_part = name[first_tab_index + 2:]  # +2 to skip the \t\t
+
+        # Remove any remaining \t\t sequences and replace with spaces
+        clean_name = company_name_part.replace('\t\t', ' ').strip()
+
+        # Clean up multiple spaces
+        clean_name = ' '.join(clean_name.split())
+
+        return clean_name
+
+    # If no \t\t found, return the original name stripped
+    return name.strip()
 
 
 def looks_like_corporate_bond(name: str) -> bool:
@@ -431,11 +453,13 @@ def process_nsdl_text(text):
             # Try equity-like line
             if m := re.search(NSDL_EQ_RE, line, re.DOTALL | re.MULTILINE | re.I):
                 isin, name, face_value, num_shares, market_value, current_value = m.groups()
-                name_clean = re.sub(r"\s+", " ", name).strip()
+                name_clean = clean_equity_name(name)  # Apply equity name cleaning
+                name_clean = re.sub(r"\s+", " ", name_clean).strip()
+
                 if looks_like_corporate_bond(name_clean):
                     current_demat["corporate_bonds"].append({
                         "isin": isin,
-                        "name": name.strip(),
+                        "name": name_clean,
                         "quantity": num_shares,
                         "price": market_value,
                         "value": current_value,
@@ -443,7 +467,7 @@ def process_nsdl_text(text):
                 else:
                     current_demat["equities"].append({
                         "isin": isin,
-                        "name": name.strip(),
+                        "name": name_clean,
                         "num_shares": num_shares,
                         "price": market_value,
                         "value": current_value,
@@ -465,7 +489,8 @@ def process_nsdl_text(text):
         elif current_demat and current_demat["type"] in ["CDSL", "CDSL Demat Account"]:
             if m := re.search(NSDL_CDSL_HOLDINGS_RE, line, re.DOTALL | re.MULTILINE | re.I):
                 isin, name, balance, *_, nav, value = m.groups()
-                name_clean = re.sub(r"\s+", " ", name).strip()
+                name_clean = clean_equity_name(name)  # Apply equity name cleaning
+                name_clean = re.sub(r"\s+", " ", name_clean).strip()
 
                 if isin.startswith("INF"):
                     current_demat["mutual_funds"].append({
@@ -532,9 +557,9 @@ def process_nsdl_text(text):
                     isin_data = isin_db.isin_lookup(equity["isin"] if isinstance(equity, dict) else equity.isin)
                     if isin_data:
                         if isinstance(equity, dict):
-                            equity["name"] = isin_data.name
+                            equity["name"] = clean_equity_name(isin_data.name)  # Apply cleaning here too
                         else:
-                            equity.name = isin_data.name
+                            equity.name = clean_equity_name(isin_data.name)  # Apply cleaning here too
 
             for bond in getattr(account, "corporate_bonds", []):
                 name = bond.get("name") if isinstance(bond, dict) else getattr(bond, "name", None)
@@ -542,8 +567,8 @@ def process_nsdl_text(text):
                     isin_data = isin_db.isin_lookup(bond["isin"] if isinstance(bond, dict) else bond.isin)
                     if isin_data:
                         if isinstance(bond, dict):
-                            bond["name"] = isin_data.name
+                            bond["name"] = clean_equity_name(isin_data.name)  # Apply cleaning here too
                         else:
-                            bond.name = isin_data.name
+                            bond.name = clean_equity_name(isin_data.name)  # Apply cleaning here too
 
     return cas_data
