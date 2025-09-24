@@ -68,6 +68,12 @@ def clean_corporate_bond_name(name: str) -> str:
     # Clean up multiple spaces
     clean_name = ' '.join(clean_name.split())
 
+    # Remove everything after "once" (case-insensitive) as it's usually descriptive text
+    # like "Once a year 8.10 05-Mar"
+    once_index = clean_name.lower().find(' once')
+    if once_index != -1:
+        clean_name = clean_name[:once_index]
+
     # Remove leading/trailing whitespace
     clean_name = clean_name.strip()
 
