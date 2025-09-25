@@ -29,7 +29,7 @@ def find_account_context(lines, mf_section_line):
     return None
 
 
-def extract_mf_holdings_data(lines, start_idx, target_account=None, statement_year=None):
+def extract_mf_holdings_data(lines, start_idx):
     """Extract MF holdings data with improved parsing that handles optional fields."""
     holdings = []
 

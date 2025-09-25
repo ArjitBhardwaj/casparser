@@ -46,15 +46,6 @@ def process_nsdl_text(text):
     hdr_data = parse_header(text[:1000])
     statement_period = StatementPeriod(from_=hdr_data["from"], to=hdr_data["to"])
 
-    # Extract year from statement period to determine parsing logic
-    statement_year = None
-    try:
-        statement_year = int(hdr_data["to"].split("-")[-1])
-    except (KeyError, ValueError, IndexError):
-        # If we can't parse the year, default to newer format (2025+) to be safe
-        # This ensures we use the more robust parsing logic by default
-        statement_year = 2025
-
     accounts = re.findall(
         DEMAT_HEADER_RE,
         text,
@@ -123,7 +114,7 @@ def process_nsdl_text(text):
                 target_key = (dp_id, client_id)
 
                 # Extract MF holdings for this specific account - pass statement year
-                mf_holdings = extract_mf_holdings_data(lines, i + 1, target_key, statement_year)
+                mf_holdings = extract_mf_holdings_data(lines, i + 1)
 
                 if mf_holdings and target_key in demat:
                     # Separate detailed and simple records
