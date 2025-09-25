@@ -29,6 +29,7 @@ from .validation_utils import (
     is_valid_fund_name,
     enhanced_looks_like_corporate_bond,
 )
+from .deduplication_utils import apply_deduplication
 
 
 def parse_header(text):
@@ -275,6 +276,7 @@ def process_nsdl_text(text):
                         })
                 continue
 
+    demat = apply_deduplication(demat)
     cas_data = NSDLCASData(
         statement_period=statement_period,
         accounts=list(demat.values()),
