@@ -96,8 +96,8 @@ def extract_mf_holdings_data(lines, start_idx):
             rf'\s+([\d,]+(?:\.\d+)?)'  # Total cost
             rf'\s+([\d,]+(?:\.\d+)?)'  # Current NAV
             rf'\s+([\d,]+(?:\.\d+)?)'  # Current value
-            rf'\s+([\d,]+(?:\.\d+)?)'  # P&L
-            rf'(?:\s+([\d,]+(?:\.\d+)?))?'  # Returns (optional)
+            rf'\s+([(-]*[\d,]+(?:\.\d+)?)\)*'  # P&L (can be negative)
+            rf'(?:\s+([(-]*[\d,]+(?:\.\d+)?)?\)*)?'  # Returns (optional, can be negative)
         )
 
         detailed_pattern_without_extra = (
@@ -110,8 +110,8 @@ def extract_mf_holdings_data(lines, start_idx):
             rf'\s+([\d,]+(?:\.\d+)?)'  # Total cost
             rf'\s+([\d,]+(?:\.\d+)?)'  # Current NAV
             rf'\s+([\d,]+(?:\.\d+)?)'  # Current value
-            rf'\s+([\d,]+(?:\.\d+)?)'  # P&L
-            rf'(?:\s+([\d,]+(?:\.\d+)?))?'  # Returns (optional)
+            rf'\s+([(-]*[\d,]+(?:\.\d+)?)\)*'  # P&L (can be negative)
+            rf'(?:\s+([(-]*[\d,]+(?:\.\d+)?)?\)*)?'  # Returns (optional, can be negative)
         )
 
         # Try to parse with flexible field matching

@@ -176,8 +176,8 @@ def get_detailed_mf_pattern():
         r'\s+'
         r'([\d,]+\.?\d*)'  # Current value
         r'\s+'
-        r'([\d,]+\.?\d*)'  # Profit/Loss
-        r'(?:\s+([\d,]+\.?\d*))?'  # Returns percentage (optional)
+        r'([(-]*[\d,]+\.?\d*)\)*'  # Profit/Loss (can be negative)
+        r'(?:\s+([(-]*[\d,]+\.?\d*)?\)*)?'  # Returns percentage (optional, can be negative)
     )
 
 # MF holdings simple pattern (for mutual_funds sections)
