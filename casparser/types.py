@@ -110,7 +110,7 @@ class Equity(BaseModel):
     name: Optional[str] = None
     isin: str
     num_shares: Decimal
-    price: Decimal
+    price: Union[Decimal, None] = None
     value: Decimal
 
     @model_validator(mode="before")

@@ -27,6 +27,8 @@ console = Console()
 def formatINR(number):
     """format a number as INR
     credit: https://stackoverflow.com/a/68484491"""
+    if number is None:
+        return "N/A"
     prefix = {True: "-", False: ""}
     number = float(number)
     number = round(number, 2)
@@ -99,7 +101,8 @@ def print_nsdl(parsed_data: NSDLCASData):
         if len(account.equities) > 0:
             table_rows.append(["[italic]Equities[/]"])
         for equity in account.equities:
-            running_balance += equity.num_shares * equity.price
+            if equity.price is not None:
+                running_balance += equity.num_shares * equity.price
             table_rows.append(
                 [
                     equity.name,
