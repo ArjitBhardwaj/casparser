@@ -180,7 +180,12 @@ def process_nsdl_text(text):
         if current_demat and current_demat["type"] in ["NSDL", "NSDL Demat Account"]:
             # Try equity-like line
             if m := re.search(NSDL_EQ_RE, line, re.DOTALL | re.MULTILINE | re.I):
-                isin, name, face_value, num_shares, market_value, current_value = m.groups()
+                isin, name, num_shares, market_value, current_value = m.groups()
+                # Note: face_value is skipped/not captured in regex
+
+                # Handle "See Note" in market_value field - set to None
+                if market_value and market_value.strip().upper() == "SEE NOTE":
+                    market_value = None
 
                 # First determine if this is a corporate bond
                 is_bond = enhanced_looks_like_corporate_bond(name)

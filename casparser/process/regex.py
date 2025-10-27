@@ -72,9 +72,11 @@ DEMAT_DP_ID_RE = r"DP\s*Id\s*:\s*(.+?)\s*Client\s*Id\s*:\s*(\d+).+PAN"
 # Fixed NSDL equity regex - simplified character class
 NSDL_EQ_RE = (
     rf"^([A-Z]{{2}}[E9][0-9A-Z]{{8}}[0-9])"
-    rf"\s*(.+?)\s*{amt_re}\s+"
-    rf"([\d,.]+)\s+"
-    rf"{amt_re}\s+{amt_re}$"
+    rf"[\s\u2029]*(.+?)[\s\u2029]*"
+    rf"(?:[\d,.]+[\s\u2029]+)?"
+    rf"([\d,.]+)[\s\u2029]+"
+    rf"([\d,.]+|See\s+Note)[\s\u2029]+"
+    rf"{amt_re}$"
 )
 
 NSDL_MF_RE = rf"^(INF[0-9A-Z]{{8}}[0-9]{{1}})\s*(.*?)\s*{amt_re}\s+{amt_re}\s+{amt_re}$"
