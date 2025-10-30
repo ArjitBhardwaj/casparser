@@ -199,11 +199,37 @@ def process_nsdl_text(text):
                 name_clean = re.sub(r"\s+", " ", name_clean).strip()
 
                 if is_bond:
+                    # For corporate bonds: extract number of bonds
+                    quantity = num_shares
+                    price = market_value
+
+                    # Handle "Not Available" or "See Note" for price - set to None
+                    if price and price.strip().upper() in ["NOT AVAILABLE", "SEE NOTE"]:
+                        price = None
+
+                    # Calculate actual number of bonds based on whether price is available
+                    try:
+                        num_shares_val = float(str(num_shares).replace(",", ""))
+                        value_val = float(str(current_value).replace(",", ""))
+
+                        if price:
+                            # If price is available: quantity = value / price
+                            price_val = float(str(price).replace(",", ""))
+                            if price_val != 0:
+                                quantity = value_val / price_val
+                        elif num_shares_val != 0:
+                            # If price is NOT available: quantity = value / num_shares (which is face value)
+                            # num_shares here represents face value per bond, so actual bonds = total value / face value
+                            quantity = value_val / num_shares_val
+                    except (ValueError, ZeroDivisionError):
+                        # If calculation fails, keep num_shares as quantity
+                        quantity = num_shares
+
                     current_demat["corporate_bonds"].append({
                         "isin": isin,
                         "name": name_clean,
-                        "quantity": num_shares,
-                        "price": market_value,
+                        "quantity": quantity,
+                        "price": price,
                         "value": current_value,
                     })
                 else:
@@ -255,11 +281,36 @@ def process_nsdl_text(text):
                     name_clean = re.sub(r"\s+", " ", name_clean).strip()
 
                     if is_bond:
+                        # For corporate bonds: extract number of bonds
+                        quantity = balance
+                        price = nav
+
+                        # Handle "Not Available" or "See Note" for price - set to None
+                        if price and price.strip().upper() in ["NOT AVAILABLE", "SEE NOTE"]:
+                            price = None
+
+                        # Calculate actual number of bonds based on whether price is available
+                        try:
+                            balance_val = float(str(balance).replace(",", ""))
+                            value_val = float(str(value).replace(",", ""))
+
+                            if price:
+                                # If price is available: quantity = value / price
+                                price_val = float(str(price).replace(",", ""))
+                                if price_val != 0:
+                                    quantity = value_val / price_val
+                            elif balance_val != 0:
+                                # If price is NOT available: quantity = value / balance (which is face value)
+                                quantity = value_val / balance_val
+                        except (ValueError, ZeroDivisionError):
+                            # If calculation fails, keep balance as quantity
+                            quantity = balance
+
                         current_demat["corporate_bonds"].append({
                             "isin": isin,
                             "name": name_clean,
-                            "quantity": balance,
-                            "price": nav,
+                            "quantity": quantity,
+                            "price": price,
                             "value": value,
                         })
                     else:

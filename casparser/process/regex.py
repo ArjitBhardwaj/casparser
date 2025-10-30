@@ -73,10 +73,10 @@ DEMAT_DP_ID_RE = r"DP\s*Id\s*:\s*(.+?)\s*Client\s*Id\s*:\s*(\d+).+PAN"
 NSDL_EQ_RE = (
     rf"^([A-Z]{{2}}[E9][0-9A-Z]{{8}}[0-9])"
     rf"[\s\u2029]*(.+?)[\s\u2029]*"
-    rf"(?:[\d,.]+[\s\u2029]+)?"
-    rf"([\d,.]+)[\s\u2029]+"
-    rf"([\d,.]+|See\s+Note)[\s\u2029]+"
-    rf"{amt_re}$"
+    rf"(?:[\d,.]+[\s\u2029]+)?"  # Optional: Face Value (not captured)
+    rf"([\d,.]+)[\s\u2029]+"      # Group 3: No. of Bonds (quantity)
+    rf"([\d,.]+|See\s+Note|Not\s+Available)[\s\u2029]+"  # Group 4: Price
+    rf"{amt_re}$"                  # Group 5: Value
 )
 
 NSDL_MF_RE = rf"^(INF[0-9A-Z]{{8}}[0-9]{{1}})\s*(.*?)\s*{amt_re}\s+{amt_re}\s+{amt_re}$"

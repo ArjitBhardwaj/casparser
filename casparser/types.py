@@ -197,7 +197,7 @@ class CorporateBond(BaseModel):
     isin: str
     # CAS usually shows quantity/face value/price/value. We keep these minimal.
     quantity: Decimal  # e.g., number of debentures/bonds
-    price: Decimal     # per-unit price shown in CAS table
+    price: Union[Decimal, None] = None     # per-unit price shown in CAS table (can be unavailable)
     value: Decimal     # total market value
 
     @model_validator(mode="before")
@@ -205,12 +205,18 @@ class CorporateBond(BaseModel):
     def fix_float(cls, data: dict):
         # Make Decimal fields robust to "1,234.56" strings
         for k, v in data.items():
-            if (
-                k in cls.__annotations__
-                and issubclass(Decimal, cls.__annotations__[k])
-                and isinstance(v, str)
-            ):
-                data[k] = v.replace(",", "_").replace("_", "")
+            if v is None or k not in cls.__annotations__:
+                continue
+            if isinstance(v, str):
+                # Check if this field should be a Decimal
+                field_type = cls.__annotations__[k]
+                # Handle Union types
+                if hasattr(field_type, '__origin__') and field_type.__origin__ is Union:
+                    # Check if Decimal is in the Union
+                    if any(arg is Decimal for arg in field_type.__args__):
+                        data[k] = v.replace(",", "_").replace("_", "")
+                elif field_type is Decimal or (hasattr(field_type, '__origin__') and issubclass(Decimal, field_type)):
+                    data[k] = v.replace(",", "_").replace("_", "")
         return data
 
 class DematAccount(BaseModel):
